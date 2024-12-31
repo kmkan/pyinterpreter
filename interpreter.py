@@ -1,8 +1,12 @@
 class Token:
-    # Token types for integers, operators, and end-of-file
+    # Token types for integers, operators, parentheses, and end-of-file
     INTEGER = 'INTEGER'
     PLUS = 'PLUS'
     MINUS = 'MINUS'
+    MUL = 'MUL'
+    DIV = 'DIV'
+    LPAREN = 'LPAREN'
+    RPAREN = 'RPAREN'
     EOF = 'EOF'
 
     def __init__(self, type_, value):
@@ -59,6 +63,22 @@ class Lexer:
                 self.advance()
                 return Token(Token.MINUS, '-')
 
+            if self.current_char == '*':
+                self.advance()
+                return Token(Token.MUL, '*')
+
+            if self.current_char == '/':
+                self.advance()
+                return Token(Token.DIV, '/')
+
+            if self.current_char == '(':
+                self.advance()
+                return Token(Token.LPAREN, '(')
+
+            if self.current_char == ')':
+                self.advance()
+                return Token(Token.RPAREN, ')')
+
             self.error()
 
         return Token(Token.EOF, None)  # No more input
@@ -73,35 +93,55 @@ class Parser:
     def error(self):
         raise Exception('Invalid syntax')
 
-    def eat(self, token_type):
+    def consume(self, token_type):
         # Consume the current token if it matches the expected type
         if self.current_token.type == token_type:
             self.current_token = self.lexer.get_next_token()
         else:
             self.error()
 
+    def factor(self):
+        # Parse a factor: INTEGER or parenthesized expression
+        token = self.current_token
+        if token.type == Token.INTEGER:
+            self.consume(Token.INTEGER)
+            return token.value
+        elif token.type == Token.LPAREN:
+            self.consume(Token.LPAREN)
+            result = self.expr()
+            self.consume(Token.RPAREN)
+            return result
+        self.error()
+
+    def term(self):
+        # Parse a term: factor (MUL | DIV factor)*
+        result = self.factor()
+        while self.current_token.type in (Token.MUL, Token.DIV):
+            token = self.current_token
+            if token.type == Token.MUL:
+                self.consume(Token.MUL)
+                result *= self.factor()
+            elif token.type == Token.DIV:
+                self.consume(Token.DIV)
+                result /= self.factor()
+        return result
+
     def expr(self):
-        # Parse and evaluate an expression (supports + and -)
-        result = self.term()  # Start with the first number
+        # Parse an expression: term (PLUS | MINUS term)*
+        result = self.term()
         while self.current_token.type in (Token.PLUS, Token.MINUS):
             token = self.current_token
             if token.type == Token.PLUS:
-                self.eat(Token.PLUS)
+                self.consume(Token.PLUS)
                 result += self.term()
             elif token.type == Token.MINUS:
-                self.eat(Token.MINUS)
+                self.consume(Token.MINUS)
                 result -= self.term()
         return result
 
-    def term(self):
-        # Parse an integer term
-        token = self.current_token
-        self.eat(Token.INTEGER)
-        return token.value
-
 
 class Interpreter:
-    # Drives the parsing and evaluates the result
+    # Parsing and evaluates the result
     def __init__(self, parser):
         self.parser = parser
 
@@ -110,7 +150,7 @@ class Interpreter:
 
 
 def main():
-    # Entry point for user input and evaluation
+    # Used for user input and evaluation
     while True:
         try:
             text = input(">>> ")
