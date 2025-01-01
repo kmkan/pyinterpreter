@@ -85,17 +85,19 @@ class Lexer:
 
 
 class AST:
+    # Base class for all Abstract Syntax Tree nodes
     pass
 
 
 class BinOp(AST):
-    def __init__(self, left, op, right):
-        self.left = left
+    # Represents a binary operation (e.g., addition, multiplication)
+    def __init__(self, op, children):
         self.token = self.op = op
-        self.right = right
+        self.children = children  # List of children nodes
 
 
 class Num(AST):
+    # Represents a number in the AST
     def __init__(self, token):
         self.token = token
         self.value = token.value
@@ -117,45 +119,35 @@ class Parser:
         else:
             self.error()
 
-    def factor(self):
-        # Parse a factor: INTEGER or parenthesized expression
+    def expr(self):
+        # Parse an expression in prefix notation: (op expr expr ...)
         token = self.current_token
-        if token.type == Token.INTEGER:
+
+        if token.type == Token.LPAREN:
+            self.consume(Token.LPAREN)
+            operator = self.current_token
+            self.consume(operator.type)  # Consume the operator
+
+            children = []
+            while self.current_token.type != Token.RPAREN:
+                if self.current_token.type == Token.LPAREN:
+                    children.append(self.expr())
+                elif self.current_token.type == Token.INTEGER:
+                    children.append(Num(self.current_token))
+                    self.consume(Token.INTEGER)
+                else:
+                    self.error()
+
+            self.consume(Token.RPAREN)
+            return BinOp(op=operator, children=children)
+        elif token.type == Token.INTEGER:
             self.consume(Token.INTEGER)
             return Num(token)
-        elif token.type == Token.LPAREN:
-            self.consume(Token.LPAREN)
-            node = self.expr()
-            self.consume(Token.RPAREN)
-            return node
         self.error()
-
-    def term(self):
-        # Parse a term: factor (MUL | DIV factor)*
-        node = self.factor()
-        while self.current_token.type in (Token.MUL, Token.DIV):
-            token = self.current_token
-            if token.type == Token.MUL:
-                self.consume(Token.MUL)
-            elif token.type == Token.DIV:
-                self.consume(Token.DIV)
-            node = BinOp(left=node, op=token, right=self.factor())
-        return node
-
-    def expr(self):
-        # Parse an expression: term (PLUS | MINUS term)*
-        node = self.term()
-        while self.current_token.type in (Token.PLUS, Token.MINUS):
-            token = self.current_token
-            if token.type == Token.PLUS:
-                self.consume(Token.PLUS)
-            elif token.type == Token.MINUS:
-                self.consume(Token.MINUS)
-            node = BinOp(left=node, op=token, right=self.term())
-        return node
 
 
 class NodeVisitor:
+    # Base class for visiting nodes in the AST
     def visit(self, node):
         method_name = 'visit_' + type(node).__name__
         visitor = getattr(self, method_name, self.generic_visit)
@@ -166,18 +158,30 @@ class NodeVisitor:
 
 
 class Interpreter(NodeVisitor):
+    # Visits AST nodes to evaluate the expression
     def __init__(self, parser):
         self.parser = parser
 
     def visit_BinOp(self, node):
-        if node.op.type == Token.PLUS:
-            return self.visit(node.left) + self.visit(node.right)
-        elif node.op.type == Token.MINUS:
-            return self.visit(node.left) - self.visit(node.right)
-        elif node.op.type == Token.MUL:
-            return self.visit(node.left) * self.visit(node.right)
-        elif node.op.type == Token.DIV:
-            return self.visit(node.left) / self.visit(node.right)
+        operation = node.op.type
+        values = [self.visit(child) for child in node.children]
+
+        if operation == Token.PLUS:
+            return sum(values)
+        elif operation == Token.MINUS:
+            if len(values) == 1:  # Unary negation
+                return -values[0]
+            return values[0] - sum(values[1:])
+        elif operation == Token.MUL:
+            result = 1
+            for v in values:
+                result *= v
+            return result
+        elif operation == Token.DIV:
+            result = values[0]
+            for v in values[1:]:
+                result /= v
+            return result
 
     def visit_Num(self, node):
         return node.value
