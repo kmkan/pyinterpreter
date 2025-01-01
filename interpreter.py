@@ -84,6 +84,23 @@ class Lexer:
         return Token(Token.EOF, None)  # No more input
 
 
+class AST:
+    pass
+
+
+class BinOp(AST):
+    def __init__(self, left, op, right):
+        self.left = left
+        self.token = self.op = op
+        self.right = right
+
+
+class Num(AST):
+    def __init__(self, token):
+        self.token = token
+        self.value = token.value
+
+
 class Parser:
     # Ensures the stream of tokens follows valid arithmetic syntax
     def __init__(self, lexer):
@@ -105,48 +122,69 @@ class Parser:
         token = self.current_token
         if token.type == Token.INTEGER:
             self.consume(Token.INTEGER)
-            return token.value
+            return Num(token)
         elif token.type == Token.LPAREN:
             self.consume(Token.LPAREN)
-            result = self.expr()
+            node = self.expr()
             self.consume(Token.RPAREN)
-            return result
+            return node
         self.error()
 
     def term(self):
         # Parse a term: factor (MUL | DIV factor)*
-        result = self.factor()
+        node = self.factor()
         while self.current_token.type in (Token.MUL, Token.DIV):
             token = self.current_token
             if token.type == Token.MUL:
                 self.consume(Token.MUL)
-                result *= self.factor()
             elif token.type == Token.DIV:
                 self.consume(Token.DIV)
-                result /= self.factor()
-        return result
+            node = BinOp(left=node, op=token, right=self.factor())
+        return node
 
     def expr(self):
         # Parse an expression: term (PLUS | MINUS term)*
-        result = self.term()
+        node = self.term()
         while self.current_token.type in (Token.PLUS, Token.MINUS):
             token = self.current_token
             if token.type == Token.PLUS:
                 self.consume(Token.PLUS)
-                result += self.term()
             elif token.type == Token.MINUS:
                 self.consume(Token.MINUS)
-                result -= self.term()
-        return result
+            node = BinOp(left=node, op=token, right=self.term())
+        return node
 
 
-class Interpreter:
-    # Parsing and evaluates the result
+class NodeVisitor:
+    def visit(self, node):
+        method_name = 'visit_' + type(node).__name__
+        visitor = getattr(self, method_name, self.generic_visit)
+        return visitor(node)
+
+    def generic_visit(self, node):
+        raise Exception('No visit_{} method'.format(type(node).__name__))
+
+
+class Interpreter(NodeVisitor):
     def __init__(self, parser):
         self.parser = parser
 
+    def visit_BinOp(self, node):
+        if node.op.type == Token.PLUS:
+            return self.visit(node.left) + self.visit(node.right)
+        elif node.op.type == Token.MINUS:
+            return self.visit(node.left) - self.visit(node.right)
+        elif node.op.type == Token.MUL:
+            return self.visit(node.left) * self.visit(node.right)
+        elif node.op.type == Token.DIV:
+            return self.visit(node.left) / self.visit(node.right)
+
+    def visit_Num(self, node):
+        return node.value
+
     def interpret(self):
-        return self.parser.expr()
+        tree = self.parser.expr()
+        return self.visit(tree)
 
 
 def main():
@@ -157,10 +195,10 @@ def main():
             if not text.strip():
                 continue
             lexer = Lexer(text)  # Tokenize input
-            parser = Parser(lexer)  # Parse tokens
-            interpreter = Interpreter(parser)  # Interpret parsed result
+            parser = Parser(lexer)  # Parse tokens into AST
+            interpreter = Interpreter(parser)  # Interpret AST
             result = interpreter.interpret()
-            print(f"Result: {result}")
+            print(f"{result}")
         except Exception as e:
             print(f"Error: {e}")
 
