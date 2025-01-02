@@ -1,5 +1,5 @@
 class Token:
-    # Token types for integers, operators, types, and program structure
+    # Token types for integers, operators, types, program structure, and procedures
     INTEGER_CONST = 'INTEGER_CONST'
     REAL_CONST = 'REAL_CONST'
     INTEGER = 'INTEGER'
@@ -21,6 +21,7 @@ class Token:
     VAR = 'VAR'
     BEGIN = 'BEGIN'
     END = 'END'
+    PROCEDURE = 'PROCEDURE'
     EOF = 'EOF'
 
     def __init__(self, type_, value):
@@ -42,6 +43,7 @@ class Lexer:
         'REAL': Token('REAL', 'REAL'),
         'BEGIN': Token('BEGIN', 'BEGIN'),
         'END': Token('END', 'END'),
+        'PROCEDURE': Token('PROCEDURE', 'PROCEDURE'),
     }
 
     def __init__(self, text):
@@ -188,6 +190,13 @@ class Block(AST):
         self.compound_statement = compound_statement
 
 
+class ProcedureDecl(AST):
+    # Represents a procedure declaration
+    def __init__(self, proc_name, block_node):
+        self.proc_name = proc_name
+        self.block_node = block_node
+
+
 class VarDecl(AST):
     # Represents a variable declaration
     def __init__(self, var_node, type_node):
@@ -274,18 +283,33 @@ class Parser:
         return Block(declarations, compound_statement)
 
     def declarations(self):
-        # declarations : VAR (variable_declaration SEMI)+ | empty
+        # declarations : VAR (variable_declaration SEMI)+
+        #              | (PROCEDURE ID SEMI block SEMI)*
+        #              | empty
         declarations = []
+
         if self.current_token.type == Token.VAR:
             self.consume(Token.VAR)
             while self.current_token.type == Token.ID:
-                declarations.extend(self.variable_declaration())
+                var_decls = self.variable_declaration()
+                declarations.extend(var_decls)
                 self.consume(Token.SEMI)
+
+        while self.current_token.type == Token.PROCEDURE:
+            self.consume(Token.PROCEDURE)
+            proc_name = self.current_token.value
+            self.consume(Token.ID)
+            self.consume(Token.SEMI)
+            block_node = self.block()
+            proc_decl = ProcedureDecl(proc_name, block_node)
+            declarations.append(proc_decl)
+            self.consume(Token.SEMI)
+
         return declarations
 
     def variable_declaration(self):
         # variable_declaration : ID (COMMA ID)* COLON type_spec
-        var_nodes = [Var(self.current_token)]
+        var_nodes = [Var(self.current_token)]  # First ID
         self.consume(Token.ID)
 
         while self.current_token.type == Token.COMMA:
@@ -296,7 +320,12 @@ class Parser:
         self.consume(Token.COLON)
         type_node = self.type_spec()
 
-        return [VarDecl(var_node, type_node) for var_node in var_nodes]
+        var_declarations = [
+            VarDecl(var_node, type_node)
+            for var_node in var_nodes
+        ]
+
+        return var_declarations
 
     def type_spec(self):
         # type_spec : INTEGER | REAL
@@ -312,9 +341,12 @@ class Parser:
         self.consume(Token.BEGIN)
         nodes = self.statement_list()
         self.consume(Token.END)
-        compound = Compound()
-        compound.children = nodes
-        return compound
+
+        root = Compound()
+        for node in nodes:
+            root.children.append(node)
+
+        return root
 
     def statement_list(self):
         # statement_list : statement | statement SEMI statement_list
@@ -330,11 +362,12 @@ class Parser:
     def statement(self):
         # statement : compound_statement | assignment_statement | empty
         if self.current_token.type == Token.BEGIN:
-            return self.compound_statement()
+            node = self.compound_statement()
         elif self.current_token.type == Token.ID:
-            return self.assignment_statement()
+            node = self.assignment_statement()
         else:
-            return self.empty()
+            node = self.empty()
+        return node
 
     def assignment_statement(self):
         # assignment_statement : variable ASSIGN expr
@@ -351,25 +384,28 @@ class Parser:
         return node
 
     def empty(self):
-        # empty :
+        # An empty production
         return NoOp()
 
     def expr(self):
-        # expr : term ((PLUS | MINUS) term)* (prefix notation)
+        # Parse an expression in prefix notation: (op expr expr ...)
         token = self.current_token
 
         if token.type == Token.LPAREN:
             self.consume(Token.LPAREN)
             operator = self.current_token
-            self.consume(operator.type)
+            self.consume(operator.type)  # Consume the operator
 
             children = []
             while self.current_token.type != Token.RPAREN:
                 if self.current_token.type == Token.LPAREN:
                     children.append(self.expr())
-                elif self.current_token.type in (Token.INTEGER_CONST, Token.REAL_CONST):
+                elif self.current_token.type == Token.INTEGER_CONST:
                     children.append(Num(self.current_token))
-                    self.consume(self.current_token.type)
+                    self.consume(Token.INTEGER_CONST)
+                elif self.current_token.type == Token.REAL_CONST:
+                    children.append(Num(self.current_token))
+                    self.consume(Token.REAL_CONST)
                 elif self.current_token.type == Token.ID:
                     children.append(self.variable())
                 else:
@@ -378,8 +414,12 @@ class Parser:
             self.consume(Token.RPAREN)
             return BinOp(op=operator, children=children)
 
-        elif token.type in (Token.INTEGER_CONST, Token.REAL_CONST):
-            self.consume(token.type)
+        elif token.type == Token.INTEGER_CONST:
+            self.consume(Token.INTEGER_CONST)
+            return Num(token)
+
+        elif token.type == Token.REAL_CONST:
+            self.consume(Token.REAL_CONST)
             return Num(token)
 
         elif token.type == Token.ID:
@@ -389,7 +429,7 @@ class Parser:
 
 
 class NodeVisitor:
-    # Visits AST nodes for evaluation
+    # Base class for visiting nodes in the AST
     def visit(self, node):
         method_name = 'visit_' + type(node).__name__
         visitor = getattr(self, method_name, self.generic_visit)
@@ -400,10 +440,9 @@ class NodeVisitor:
 
 
 class Interpreter(NodeVisitor):
-    # Visits AST nodes to interpret the program
     def __init__(self, parser):
         self.parser = parser
-        self.GLOBAL_SCOPE = {}
+        self.GLOBAL_MEMORY = {}
 
     def visit_Program(self, node):
         self.visit(node.block)
@@ -413,37 +452,49 @@ class Interpreter(NodeVisitor):
             self.visit(declaration)
         self.visit(node.compound_statement)
 
+    def visit_ProcedureDecl(self, node):
+        # For now, procedures are ignored during interpretation
+        pass
+
     def visit_VarDecl(self, node):
-        pass  
+        # Variable declarations are ignored in this phase
+        pass
 
     def visit_Type(self, node):
-        pass  
+        # Types are ignored in this phase
+        pass
 
     def visit_Compound(self, node):
+        # Visit all of the child nodes in a compound statement
         for child in node.children:
             self.visit(child)
 
     def visit_Assign(self, node):
+        # Handle assignment statements by storing the value in memory
         var_name = node.left.value
-        self.GLOBAL_SCOPE[var_name.lower()] = self.visit(node.right)
+        self.GLOBAL_MEMORY[var_name] = self.visit(node.right)
 
     def visit_Var(self, node):
+        # Retrieve the value of a variable from memory
         var_name = node.value
-        value = self.GLOBAL_SCOPE.get(var_name.lower())
-        if value is None:
-            raise NameError(f'Variable {repr(var_name)} is not defined')
-        return value
+        if var_name not in self.GLOBAL_MEMORY:
+            raise NameError(f"Variable '{var_name}' not found")
+        return self.GLOBAL_MEMORY[var_name]
 
     def visit_NoOp(self, node):
+         # Handle empty statements (no operation)
         pass
 
     def visit_BinOp(self, node):
+        # Handle binary operations (e.g., addition, subtraction)
         operation = node.op.type
         values = [self.visit(child) for child in node.children]
 
         if operation == Token.PLUS:
             return sum(values)
         elif operation == Token.MINUS:
+            if len(values) == 1:  # Unary negation
+                return -values[0]
             return values[0] - sum(values[1:])
         elif operation == Token.MUL:
             result = 1
@@ -451,28 +502,35 @@ class Interpreter(NodeVisitor):
                 result *= v
             return result
         elif operation == Token.INTEGER_DIV:
-            return values[0] // values[1]
+            result = values[0]
+            for v in values[1:]:
+                result //= v
+            return result
         elif operation == Token.FLOAT_DIV:
-            return values[0] / values[1]
+            result = values[0]
+            for v in values[1:]:
+                result /= v
+            return result
 
     def visit_Num(self, node):
+        # Return the numeric value of a number node
         return node.value
 
     def interpret(self):
+        # Interpret the parsed program by visiting the AST  
         tree = self.parser.program()
         self.visit(tree)
-        return self.GLOBAL_SCOPE
+        return self.GLOBAL_MEMORY
 
 
 def main():
     import sys
     text = open(sys.argv[1], 'r').read()
-
     lexer = Lexer(text)
     parser = Parser(lexer)
     interpreter = Interpreter(parser)
     result = interpreter.interpret()
-    print(interpreter.GLOBAL_SCOPE)
+    print(result) 
 
 
 if __name__ == '__main__':
